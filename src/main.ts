@@ -20,7 +20,9 @@ async function bootstrap() {
   });
 
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
-  app.enableCors();
+  app.enableCors({
+    origin: '*', // Разрешаем подключения с любого источника
+  });
 
   // --- НАСТРОЙКА SWAGGER ---
   const config = new DocumentBuilder()
@@ -34,6 +36,6 @@ async function bootstrap() {
   SwaggerModule.setup('api', app, document); // Документация будет доступна по адресу /api
   // -------------------------
 
-  await app.listen(3000);
+  await app.listen(3000, '0.0.0.0'); // Слушаем на всех сетевых интерфейсах
 }
 bootstrap();
