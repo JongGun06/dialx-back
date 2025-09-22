@@ -36,6 +36,6 @@ async function bootstrap() {
   SwaggerModule.setup('api', app, document); // Документация будет доступна по адресу /api
   // -------------------------
 
-  await app.listen(3000, '0.0.0.0'); // Слушаем на всех сетевых интерфейсах
+  await app.listen(process.env.PORT || 3000);
 }
 bootstrap();
