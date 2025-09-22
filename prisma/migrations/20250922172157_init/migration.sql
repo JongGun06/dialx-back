@@ -1,6 +1,3 @@
--- CreateSchema
-CREATE SCHEMA IF NOT EXISTS "public";
-
 -- CreateEnum
 CREATE TYPE "public"."SubscriptionStatus" AS ENUM ('FREE', 'ACTIVE', 'CANCELED', 'INCOMPLETE');
 
@@ -140,4 +137,3 @@ ALTER TABLE "public"."AiMessage" ADD CONSTRAINT "AiMessage_characterId_fkey" FOR
 
 -- AddForeignKey
 ALTER TABLE "public"."AiMessage" ADD CONSTRAINT "AiMessage_profileId_fkey" FOREIGN KEY ("profileId") REFERENCES "public"."Profile"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
