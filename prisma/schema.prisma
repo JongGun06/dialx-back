@@ -1,0 +1,117 @@
+// Path: prisma/schema.prisma
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum SubscriptionStatus { 
+  FREE
+  ACTIVE
+  CANCELED
+  INCOMPLETE
+}
+
+enum ChatType {
+  PRIVATE
+  GROUP
+}
+
+enum AiMessageRole {
+  USER
+  MODEL
+}
+
+
+model User {
+  id                 String    @id @default(uuid())
+  email              String    @unique
+  password           String
+  isEmailConfirmed   Boolean   @default(false)
+  hashedRefreshToken String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  profile            Profile?
+  stripeCustomerId   String?   @unique
+  subscriptionId     String?   @unique
+  subscriptionStatus SubscriptionStatus @default(FREE)
+}
+
+model Profile {
+  id             String        @id @default(uuid())
+  username       String        @unique
+  avatarUrl      String?
+  createdAt      DateTime      @default(now())
+  settings       Json?         // <-- ДОБАВЛЕНО ЭТО ПОЛЕ
+  updatedAt      DateTime      @updatedAt
+  userId         String        @unique
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sentMessages   Message[]
+  chatMembership ChatParticipant[]
+  aiCharacters   AiCharacter[]
+  aiMessages     AiMessage[]
+}
+
+
+model Chat {
+  id           String            @id @default(uuid())
+  name         String?
+  avatarUrl    String?
+  type         ChatType          @default(PRIVATE)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  messages     Message[]
+  participants ChatParticipant[]
+}
+
+model ChatParticipant {
+  id        String   @id @default(uuid())
+  chatId    String
+  profileId String
+  joinedAt  DateTime @default(now())
+  chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  @@unique([chatId, profileId])
+}
+
+// --- ИЗМЕНЯЕМ МОДЕЛЬ MESSAGE ---
+model Message {
+  id        String   @id @default(uuid())
+  content   String? // Текст теперь необязателен
+  fileUrl   String? // Ссылка на файл/картинку
+  fileType  String? // Тип файла, например 'image/jpeg'
+  createdAt DateTime @default(now())
+  chatId    String
+  senderId  String
+  chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  sender    Profile  @relation(fields: [senderId], references: [id], onDelete: Cascade)
+}
+
+// ... (модели AiCharacter и AiMessage без изменений) ...
+
+model AiCharacter {
+  id               String      @id @default(uuid())
+  name             String
+  avatarUrl        String?
+  persona          String      @db.Text
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  creatorProfileId String
+  creator          Profile     @relation(fields: [creatorProfileId], references: [id], onDelete: Cascade)
+  messages         AiMessage[]
+}
+
+model AiMessage {
+  id          String        @id @default(uuid())
+  role        AiMessageRole
+  content     String        @db.Text
+  createdAt   DateTime      @default(now())
+  characterId String
+  profileId   String
+  character   AiCharacter   @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  profile     Profile       @relation(fields: [profileId], references: [id], onDelete: Cascade)
+}
