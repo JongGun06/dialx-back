@@ -13,26 +13,47 @@ export class WsJwtGuard implements CanActivate {
 
   canActivate(context: ExecutionContext): boolean {
     const client: Socket = context.switchToWs().getClient<Socket>();
-    const token = client.handshake.headers.authorization?.split(' ')[1];
+    const token = this.extractToken(client);
 
     if (!token) {
-      this.logger.error('No token provided');
-      return false;
-    }
-
-    const jwtSecret = this.configService.get<string>('JWT_ACCESS_SECRET');
-    if (!jwtSecret) {
-      this.logger.error('JWT_ACCESS_SECRET is not defined in .env file');
+      this.logger.warn(`Unauthenticated connection attempt from socket ${client.id}. No token provided.`);
+      client.disconnect(true);
       return false;
     }
 
     try {
+      const jwtSecret = this.configService.get<string>('JWT_ACCESS_SECRET');
+
+      // --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+      // Добавляем проверку, что секретный ключ загружен из .env
+      if (!jwtSecret) {
+        this.logger.error('JWT_ACCESS_SECRET is not configured on the server. Disconnecting client.');
+        client.disconnect(true);
+        return false;
+      }
+      // --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+
+      // Теперь TypeScript уверен, что jwtSecret - это строка
       const decoded = verify(token, jwtSecret);
       client.handshake.auth.user = decoded;
       return true;
+
     } catch (e) {
-      this.logger.error(`Token validation failed: ${e.message}`);
+      this.logger.warn(`Token validation failed for socket ${client.id}: ${e.message}. Disconnecting client.`);
+      client.disconnect(true);
       return false;
     }
+  }
+
+  private extractToken(client: Socket): string | undefined {
+    const fromAuth = client.handshake.auth?.token;
+    if (fromAuth) {
+      return fromAuth;
+    }
+    const fromHeaders = client.handshake.headers?.authorization;
+    if (fromHeaders && fromHeaders.startsWith('Bearer ')) {
+      return fromHeaders.split(' ')[1];
+    }
+    return undefined;
   }
 }
