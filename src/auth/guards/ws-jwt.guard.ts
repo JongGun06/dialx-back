@@ -12,48 +12,58 @@ export class WsJwtGuard implements CanActivate {
   constructor(private configService: ConfigService) {}
 
   canActivate(context: ExecutionContext): boolean {
-    const client: Socket = context.switchToWs().getClient<Socket>();
-    const token = this.extractToken(client);
+    this.logger.log('--- WebSocket Guard: Starting authentication ---'); // <-- Новый лог
 
-    if (!token) {
-      this.logger.warn(`Unauthenticated connection attempt from socket ${client.id}. No token provided.`);
-      client.disconnect(true);
-      return false;
-    }
-
+    const client: Socket & { user?: any } = context.switchToWs().getClient<Socket>();
+    
     try {
-      const jwtSecret = this.configService.get<string>('JWT_ACCESS_SECRET');
-
-      // --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-      // Добавляем проверку, что секретный ключ загружен из .env
-      if (!jwtSecret) {
-        this.logger.error('JWT_ACCESS_SECRET is not configured on the server. Disconnecting client.');
+      // 1. Извлекаем токен
+      const token = this.extractToken(client);
+      if (!token) {
+        this.logger.warn(`[FAIL] No token found. Disconnecting client ${client.id}.`); // <-- Новый лог
         client.disconnect(true);
         return false;
       }
-      // --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+      this.logger.log(`[OK] Token found for client ${client.id}.`); // <-- Новый лог
 
-      // Теперь TypeScript уверен, что jwtSecret - это строка
+      // 2. Проверяем наличие секрета на сервере
+      const jwtSecret = this.configService.get<string>('JWT_ACCESS_SECRET');
+      if (!jwtSecret) {
+        this.logger.error('[FAIL] JWT_ACCESS_SECRET is not configured on the server!'); // <-- Новый лог
+        client.disconnect(true);
+        return false;
+      }
+      this.logger.log('[OK] JWT secret key is configured.'); // <-- Новый лог
+
+      // 3. Валидируем токен
       const decoded = verify(token, jwtSecret);
-      client.handshake.auth.user = decoded;
-      return true;
+      client.user = decoded; // Прикрепляем пользователя к сокету
+      
+      this.logger.log(`[SUCCESS] Client ${client.id} authenticated successfully. User ID: ${decoded.sub}`); // <-- Новый лог
+      return true; // Успех!
 
     } catch (e) {
-      this.logger.warn(`Token validation failed for socket ${client.id}: ${e.message}. Disconnecting client.`);
+      this.logger.warn(`[FAIL] Token validation failed for client ${client.id}: ${e.message}`); // <-- Новый лог
       client.disconnect(true);
       return false;
     }
   }
 
   private extractToken(client: Socket): string | undefined {
+    // Сначала ищем в auth (правильный способ для клиентов)
     const fromAuth = client.handshake.auth?.token;
     if (fromAuth) {
+      this.logger.log('Token extracted from handshake.auth.token'); // <-- Новый лог
       return fromAuth;
     }
+
+    // Потом в headers (запасной способ для тестов)
     const fromHeaders = client.handshake.headers?.authorization;
     if (fromHeaders && fromHeaders.startsWith('Bearer ')) {
+      this.logger.log('Token extracted from handshake.headers.authorization'); // <-- Новый лог
       return fromHeaders.split(' ')[1];
     }
+    
     return undefined;
   }
-}
+} 

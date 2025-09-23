@@ -8,9 +8,8 @@ import { HttpModule } from '@nestjs/axios';
 @Module({
   imports: [
     ConfigModule,
-    // Просто регистрируем модуль с таймаутом
     HttpModule.register({
-      timeout: 15000, // 15 секунд
+      timeout: 15000, 
     }),
   ],
   providers: [AiService],

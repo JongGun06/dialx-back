@@ -8,9 +8,12 @@ import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule } from '@nestjs/config';
 import { MailerModule } from '../mailer/mailer.module';
 import { AccessTokenStrategy, RefreshTokenStrategy } from './strategies/index';
+import { WsJwtGuard } from './guards/ws-jwt.guard'; // <-- 1. ИМПОРТИРУЕМ ГАРД
+
 @Module({
   imports: [PrismaModule, JwtModule.register({}), ConfigModule, MailerModule],
   controllers: [AuthController],
-  providers: [AuthService, AccessTokenStrategy, RefreshTokenStrategy],
+  providers: [AuthService, AccessTokenStrategy, RefreshTokenStrategy,WsJwtGuard],
+  exports:[WsJwtGuard,AuthService]
 })
 export class AuthModule {}

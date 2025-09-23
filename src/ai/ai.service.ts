@@ -5,7 +5,6 @@ import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 
-// Описываем структуру сообщения для истории
 interface ChatMessage {
   role: 'user' | 'model';
   parts: { text: string }[];
@@ -22,7 +21,6 @@ export class AiService {
     private httpService: HttpService,
   ) {}
 
-  // Теперь метод принимает историю диалога
   async getChatCompletion(persona: string, history: ChatMessage[]): Promise<string> {
     const apiKey = this.configService.get<string>('GEMINI_API_KEY');
     if (!apiKey) {
@@ -34,7 +32,7 @@ export class AiService {
       systemInstruction: {
         parts: [{ text: persona }],
       },
-      contents: history, // Отправляем всю историю
+      contents: history, 
     };
 
     try {

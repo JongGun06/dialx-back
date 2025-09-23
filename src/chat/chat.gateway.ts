@@ -1,13 +1,23 @@
 // Path: src/chat/chat.gateway.ts
 
-import { WebSocketGateway, SubscribeMessage, MessageBody, WebSocketServer, ConnectedSocket, OnGatewayConnection, OnGatewayDisconnect } from '@nestjs/websockets';
+import {
+  WebSocketGateway,
+  OnGatewayConnection,
+  OnGatewayDisconnect,
+  WebSocketServer,
+  SubscribeMessage,
+  MessageBody,
+  ConnectedSocket,
+} from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { Logger, UseGuards } from '@nestjs/common';
-import { WsJwtGuard } from '../auth/guards/ws-jwt.guard';
+import { forwardRef, Inject, Logger } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 import { AiService } from '../ai/ai.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { verify } from 'jsonwebtoken';
+import { ChatService } from './chat.service';
 
-@UseGuards(WsJwtGuard)
 @WebSocketGateway({ cors: { origin: '*' } })
 export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
@@ -22,46 +32,69 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   constructor(
     private readonly aiService: AiService,
     private readonly prisma: PrismaService,
+    private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
+    @Inject(forwardRef(() => ChatService)) 
+    private readonly chatService: ChatService,
   ) {}
 
-  handleConnection(client: Socket) {
-    this.logger.log(`Client connected: ${client.id}`);
-    const userPayload = client.handshake.auth.user;
-    const userId = userPayload?.sub;
+  async handleConnection(client: Socket & { user?: any }) {
+    this.logger.log(`Client connected: ${client.id}. Performing authentication...`);
 
-    if (!userId) {
-      this.logger.error(`Unauthenticated connection attempt from socket ${client.id}.`);
-      client.disconnect(); // Отключаем неавторизованных пользователей
-      return;
+    try {
+      const token = this.extractToken(client);
+      if (!token) {
+        throw new Error('No token provided');
+      }
+
+      const jwtSecret = this.configService.get<string>('JWT_ACCESS_SECRET');
+      if (!jwtSecret) {
+        throw new Error('JWT_ACCESS_SECRET is not configured');
+      }
+
+      const decoded = verify(token, jwtSecret);
+      client.user = decoded; // Прикрепляем пользователя к сокету
+      const userId = client.user?.sub;
+
+      if (!userId) {
+        throw new Error('User ID not found in token payload');
+      }
+
+      this.logger.log(`Client ${client.id} authenticated successfully. User ID: ${userId}`);
+      
+      // Логика системы присутствия
+      client.emit('onlineUsersList', Array.from(this.onlineUsers));
+      this.onlineUsers.add(userId);
+      this.socketIdToUserId.set(client.id, userId);
+      client.broadcast.emit('presenceUpdate', { userId, status: 'online' });
+
+    } catch (e) {
+      this.logger.warn(`Authentication failed for client ${client.id}: ${e.message}`);
+      client.disconnect();
+    }
+  }
+
+  private extractToken(client: Socket): string | undefined {
+    // Сначала ищем в auth (правильный способ для клиентов)
+    const fromAuth = client.handshake.auth?.token;
+    if (fromAuth) {
+      return fromAuth;
     }
 
-    // 1. Отправляем новому клиенту список всех, кто уже онлайн
-    client.emit('onlineUsersList', Array.from(this.onlineUsers));
-
-    // 2. Добавляем нового пользователя в наши списки отслеживания
-    this.onlineUsers.add(userId);
-    this.socketIdToUserId.set(client.id, userId);
-
-    // 3. Рассылаем ВСЕМ ОСТАЛЬНЫМ событие, что этот пользователь теперь онлайн
-    client.broadcast.emit('presenceUpdate', { userId, status: 'online' });
+    const fromHeaders = client.handshake.headers?.authorization;
+    if (fromHeaders && fromHeaders.startsWith('Bearer ')) {
+      return fromHeaders.split(' ')[1];
+    }
+    
+    return undefined;
   }
+
   handleDisconnect(client: Socket) {
     this.logger.log(`Client disconnected: ${client.id}`);
-
-    // 1. Находим ID пользователя по ID его сокета
-    const userId = this.socketIdToUserId.get(client.id);
-
+    const userId = this.socketIdToUserId.get(client.id); 
     if (userId) {
-      // 2. Удаляем связку сокет-пользователь
       this.socketIdToUserId.delete(client.id);
-
-      // 3. Проверяем, есть ли у этого пользователя другие активные подключения
-      // (например, открыта вкладка в другом браузере или на телефоне)
-      const userHasOtherConnections = Array.from(
-        this.socketIdToUserId.values(),
-      ).includes(userId);
-
-      // 4. Если это было последнее активное подключение, объявляем пользователя оффлайн
+      const userHasOtherConnections = Array.from(this.socketIdToUserId.values()).includes(userId);
       if (!userHasOtherConnections) {
         this.onlineUsers.delete(userId);
         this.server.emit('presenceUpdate', { userId, status: 'offline' });
@@ -84,10 +117,16 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: { characterId: string; content: string },
     @ConnectedSocket() client: Socket,
   ) {
-    const userPayload = client.handshake.auth.user;
-    if (!userPayload || !userPayload.sub) { client.emit('error', 'Authentication error.'); return; }
+    // --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+    const userId = (client as any).user?.sub;
+    if (!userId) { 
+      client.emit('error', 'Authentication error.'); 
+      return; 
+    }
 
-    const profile = await this.prisma.profile.findUnique({ where: { userId: userPayload.sub } });
+    const profile = await this.prisma.profile.findUnique({ where: { userId: userId } });
+    // --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+    
     if (!profile) { client.emit('error', 'Profile not found.'); return; }
     
     const character = await this.prisma.aiCharacter.findUnique({ where: { id: data.characterId } });
@@ -97,7 +136,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       where: { characterId: data.characterId, profileId: profile.id },
       orderBy: { createdAt: 'desc' }, take: 10,
     });
-    dbHistory.reverse();
+    dbHistory.reverse(); 
 
     const history = dbHistory.map(msg => ({
       role: msg.role.toLowerCase() as 'user' | 'model',
@@ -110,25 +149,13 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       character.persona,
       history,
     );
-
-    // --- НАЧАЛО ИСПРАВЛЕНИЯ: СОХРАНЯЕМ ДИАЛОГ В БД ---
+    
     await this.prisma.aiMessage.createMany({
       data: [
-        {
-          role: 'USER',
-          content: data.content,
-          characterId: data.characterId,
-          profileId: profile.id,
-        },
-        {
-          role: 'MODEL',
-          content: aiResponse,
-          characterId: data.characterId,
-          profileId: profile.id,
-        },
+        { role: 'USER', content: data.content, characterId: data.characterId, profileId: profile.id },
+        { role: 'MODEL', content: aiResponse, characterId: data.characterId, profileId: profile.id },
       ],
     });
-    // --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
     client.emit('aiMessage', {
       characterId: character.id,

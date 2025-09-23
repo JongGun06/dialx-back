@@ -42,7 +42,7 @@ export class ChatService {
 
   async createMessage(dto: CreateMessageDto, chatId: string, senderUserId: string) {
     if (!dto.content && !dto.fileUrl) {
-      throw new BadRequestException('Сообщение не может быть пустым. Укажите текст или прикрепите файл.');
+      throw new BadRequestException('Сообщение не может быть пустым.');
     }
     const { profile } = await this.validateChatMembership(chatId, senderUserId);
     const message = await this.prisma.message.create({
@@ -59,19 +59,15 @@ export class ChatService {
         },
       },
     });
-
     const messageForClient = {
       id: message.id,
       content: message.content,
       fileUrl: message.fileUrl,
       fileType: message.fileType,
       createdAt: message.createdAt,
-      author: message.sender,
+      author: message.sender, // Включаем информацию об авторе
     };
-    
-    // Даем команду нашему Gateway разослать это сообщение всем в комнате
     this.chatGateway.server.to(chatId).emit('newMessage', messageForClient);
-
     return messageForClient;
   }
   
