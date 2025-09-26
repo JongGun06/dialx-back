@@ -1,17 +1,20 @@
 // Path: src/chat/chat.service.ts
 
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Inject, forwardRef, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateMessageDto } from './dto/create-message.dto';
 import { ChatGateway } from './chat.gateway';
 
 @Injectable()
 export class ChatService {
+    private readonly logger = new Logger(ChatService.name); // 🛠️
+
   constructor(
     private prisma: PrismaService,
     @Inject(forwardRef(() => ChatGateway))
-    private chatGateway: ChatGateway,
+    private chatGateway: ChatGateway, 
   ) {}
+  
 
   async findAllForUser(userId: string) {
     const profile = await this.prisma.profile.findUnique({ where: { userId } });
@@ -23,28 +26,38 @@ export class ChatService {
       where: { participants: { some: { profileId: profile.id } } },
       include: {
         participants: {
-          select: { profile: { select: { id: true, username: true, avatarUrl: true } } },
+          select: { profile: { select: { id: true, username: true, avatarUrl: true, userId: true } } },
         },
-        messages: { orderBy: { createdAt: 'desc' }, take: 1 },
+        messages: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          include: {
+            sender: { // И сразу подгружаем автора этого сообщения
+              select: { id: true, username: true, avatarUrl: true, userId: true }
+            }
+          }
+        },
       },
     });
 
-    // Исправляем логику трансформации.
-    // Теперь isGroup определяется СТРОГО по полю `type`.
     return chats.map((chat) => {
-      const { type, ...rest } = chat;
+      const { type, participants, ...rest } = chat;
       return {
         ...rest,
         isGroup: type === 'GROUP',
+        participants: participants.map(p => p.profile),
       };
     });
   }
 
   async createMessage(dto: CreateMessageDto, chatId: string, senderUserId: string) {
+    this.logger.log(`[createMessage] 🚧 Starting to create a message for chat ${chatId} by user ${senderUserId}`); // <-- НОВЫЙ ЛОГ
+
     if (!dto.content && !dto.fileUrl) {
       throw new BadRequestException('Сообщение не может быть пустым.');
     }
     const { profile } = await this.validateChatMembership(chatId, senderUserId);
+
     const message = await this.prisma.message.create({
       data: {
         chatId,
@@ -59,15 +72,31 @@ export class ChatService {
         },
       },
     });
+
+    this.logger.log(`[createMessage] ✅ Message successfully saved to DB. ID: ${message.id}`); // <-- НОВЫЙ ЛОГ
+
     const messageForClient = {
       id: message.id,
       content: message.content,
       fileUrl: message.fileUrl,
       fileType: message.fileType,
       createdAt: message.createdAt,
-      author: message.sender, // Включаем информацию об авторе
+      author: message.sender,
     };
-    this.chatGateway.server.to(chatId).emit('newMessage', messageForClient);
+    
+    // --- САМАЯ ВАЖНАЯ ПРОВЕРКА ---
+    this.logger.log(`[createMessage] 🕵️‍♂️ Checking ChatGateway before emitting...`); // <-- НОВЫЙ ЛОГ
+    
+    if (!this.chatGateway) {
+        this.logger.error(`[createMessage] 💥 CRITICAL: this.chatGateway is UNDEFINED! Dependency injection failed.`); // <-- НОВЫЙ ЛОГ
+    } else if (!this.chatGateway.server) {
+        this.logger.error(`[createMessage] 💥 CRITICAL: this.chatGateway.server is UNDEFINED! Gateway is not ready.`); // <-- НОВЫЙ ЛОГ
+    } else {
+        this.logger.log(`[createMessage] ✅ ChatGateway is available. Emitting 'newMessage' to room ${chatId}...`); // <-- НОВЫЙ ЛОГ
+        this.chatGateway.server.to(chatId).emit('newMessage', messageForClient);
+        this.logger.log(`[createMessage] ✅ Event 'newMessage' was successfully emitted to room ${chatId}.`); // <-- НОВЫЙ ЛОГ
+    }
+
     return messageForClient;
   }
   
@@ -147,24 +176,13 @@ export class ChatService {
   }
 
   async createOrFindPrivateChat(creatorUserId: string, otherProfileId: string) {
-    const creatorProfile = await this.prisma.profile.findUnique({
-      where: { userId: creatorUserId },
-      select: { id: true },
-    });
+    const creatorProfile = await this.prisma.profile.findUnique({ where: { userId: creatorUserId } });
+    if (!creatorProfile) { throw new NotFoundException('Ваш профиль не найден'); }
+    if (creatorProfile.id === otherProfileId) { throw new BadRequestException('Вы не можете создать чат с самим собой.'); }
 
-    if (!creatorProfile) {
-      throw new NotFoundException('Ваш профиль не найден');
-    }
-
-    if (creatorProfile.id === otherProfileId) {
-      throw new BadRequestException('Вы не можете создать чат с самим собой.');
-    }
-
-    // Ищем существующий личный чат между этими двумя пользователями
     const existingChat = await this.prisma.chat.findFirst({
       where: {
         type: 'PRIVATE',
-        // Условие, что ОБА пользователя являются участниками
         AND: [
           { participants: { some: { profileId: creatorProfile.id } } },
           { participants: { some: { profileId: otherProfileId } } },
@@ -172,27 +190,35 @@ export class ChatService {
       },
     });
 
-    // Если чат найден, возвращаем его данные
     if (existingChat) {
-      // Используем уже существующий метод, чтобы формат ответа был консистентным
+      this.logger.log(`[Private Chat] Найден существующий чат: ${existingChat.id}`);
       return this.findChatById(existingChat.id, creatorUserId);
     }
-
-    // Если чат не найден, создаем новый
+    
+    // Если чат не найден, создаем новый и уведомляем участников
+    this.logger.log(`[Private Chat] Создание нового личного чата...`);
     const newChat = await this.prisma.chat.create({
       data: {
         type: 'PRIVATE',
         participants: {
-          create: [
-            { profileId: creatorProfile.id },
-            { profileId: otherProfileId },
-          ],
+          create: [{ profileId: creatorProfile.id }, { profileId: otherProfileId }],
         },
+      },
+      include: {
+        participants: { include: { profile: true } }, // Включаем профили для получения userId
       },
     });
 
-    // И возвращаем данные нового чата в том же формате
-    return this.findChatById(newChat.id, creatorUserId);
+    const formattedChat = await this.findChatById(newChat.id, creatorUserId);
+
+    const userIdsToNotify = newChat.participants.map(p => p.profile.userId);
+    this.logger.log(`[Private Chat] Отправка события 'newChat' пользователям: ${userIdsToNotify.join(', ')}`);
+
+    userIdsToNotify.forEach(userId => {
+      this.chatGateway.server.to(userId).emit('newChat', formattedChat);
+    });
+
+    return formattedChat;
   }
 
   
@@ -203,14 +229,34 @@ export class ChatService {
   async createGroupChat(creatorUserId: string, memberProfileIds: string[], name: string, avatarUrl?: string) {
     const creatorProfile = await this.prisma.profile.findUnique({ where: { userId: creatorUserId } });
     if (!creatorProfile) { throw new NotFoundException('Профиль создателя не найден'); }
-    const members = await this.prisma.profile.findMany({ where: { id: { in: memberProfileIds } } });
-    if (members.length !== memberProfileIds.length) { throw new BadRequestException('Один или несколько приглашенных пользователей не найдены.'); }
-    const allIdsWithDuplicates = [creatorProfile.id, ...memberProfileIds];
-    const uniqueParticipantIds = [...new Set(allIdsWithDuplicates)];
-    return this.prisma.chat.create({
-      data: { name, avatarUrl, type: 'GROUP', participants: { create: uniqueParticipantIds.map(profileId => ({ profileId })) } },
-      include: { participants: { include: { profile: true } } },
+
+    const uniqueParticipantIds = [...new Set([creatorProfile.id, ...memberProfileIds])];
+
+    const newChat = await this.prisma.chat.create({
+      data: {
+        name,
+        avatarUrl,
+        type: 'GROUP',
+        participants: { create: uniqueParticipantIds.map(profileId => ({ profileId })) },
+      },
+      include: {
+        participants: { include: { profile: true } }, // Включаем профили для получения userId
+      },
     });
+
+    const formattedChat = await this.findChatById(newChat.id, creatorUserId);
+    
+    // Получаем ID всех пользователей, которых нужно уведомить
+    const userIdsToNotify = newChat.participants.map(p => p.profile.userId);
+
+    this.logger.log(`[createGroupChat] Отправка события 'newChat' пользователям: ${userIdsToNotify.join(', ')}`);
+    
+    // Отправляем событие каждому участнику в его персональную комнату
+    userIdsToNotify.forEach(userId => {
+      this.chatGateway.server.to(userId).emit('newChat', formattedChat);
+    });
+
+    return formattedChat;
   }
   async updateAvatar(chatId: string, avatarUrl: string, currentUserId: string) {
     await this.validateChatMembership(chatId, currentUserId);

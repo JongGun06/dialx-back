@@ -6,7 +6,7 @@ import {
   Body,
   HttpCode,
   HttpStatus,
-  Get,
+  Get, 
   Query,
   Res,
   UseGuards,

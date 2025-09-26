@@ -5,6 +5,7 @@ import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { json } from 'express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import * as bodyParser from 'body-parser';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -18,6 +19,10 @@ async function bootstrap() {
       json()(req, res, next);
     }
   });
+  app.use(
+  '/stripe/webhook',
+  bodyParser.raw({ type: 'application/json' }),
+);
 
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   app.enableCors({

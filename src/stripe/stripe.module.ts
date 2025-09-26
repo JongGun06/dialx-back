@@ -7,7 +7,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { ConfigModule } from '@nestjs/config';
 
 @Module({
-  imports: [PrismaModule, ConfigModule],
+  imports: [PrismaModule, ConfigModule], 
   controllers: [StripeController],
   providers: [StripeService],
 })

@@ -14,5 +14,5 @@ import { HttpModule } from '@nestjs/axios';
   ],
   providers: [AiService],
   exports: [AiService],
-})
+}) 
 export class AiModule {}

@@ -10,14 +10,16 @@ import {
   ConnectedSocket,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { forwardRef, Inject, Logger } from '@nestjs/common';
+import { forwardRef, Inject, Logger, UseGuards } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { AiService } from '../ai/ai.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { verify } from 'jsonwebtoken';
 import { ChatService } from './chat.service';
+import { WsJwtGuard } from 'src/auth/guards/ws-jwt.guard';
 
+@UseGuards(WsJwtGuard) 
 @WebSocketGateway({ cors: { origin: '*' } })
 export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
@@ -39,67 +41,52 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {}
 
   async handleConnection(client: Socket & { user?: any }) {
-    this.logger.log(`Client connected: ${client.id}. Performing authentication...`);
-
     try {
       const token = this.extractToken(client);
-      if (!token) {
-        throw new Error('No token provided');
-      }
-
-      const jwtSecret = this.configService.get<string>('JWT_ACCESS_SECRET');
-      if (!jwtSecret) {
-        throw new Error('JWT_ACCESS_SECRET is not configured');
-      }
-
-      const decoded = verify(token, jwtSecret);
-      client.user = decoded; // Прикрепляем пользователя к сокету
-      const userId = client.user?.sub;
-
-      if (!userId) {
-        throw new Error('User ID not found in token payload');
-      }
-
-      this.logger.log(`Client ${client.id} authenticated successfully. User ID: ${userId}`);
+      if (!token) throw new Error('No token provided');
       
-      // Логика системы присутствия
-      client.emit('onlineUsersList', Array.from(this.onlineUsers));
+      const jwtSecret = this.configService.get<string>('JWT_ACCESS_SECRET');
+      if (!jwtSecret) throw new Error('JWT_ACCESS_SECRET is not configured');
+      
+      const decoded = verify(token, jwtSecret) as { sub: string };
+      client.user = decoded;
+      const userId = client.user?.sub;
+      if (!userId) throw new Error('User ID not found in token payload');
+
+      // --- ФИНАЛЬНАЯ ЛОГИКА ---
       this.onlineUsers.add(userId);
       this.socketIdToUserId.set(client.id, userId);
+      client.emit('onlineUsersList', Array.from(this.onlineUsers));
       client.broadcast.emit('presenceUpdate', { userId, status: 'online' });
+      this.logger.log(`[Presence] User ${userId} connected. Total online: ${this.onlineUsers.size}`);
+      // ------------------------
+      
+      client.join(userId);
 
     } catch (e) {
-      this.logger.warn(`Authentication failed for client ${client.id}: ${e.message}`);
+      this.logger.warn(`[Connection] Auth failed for client ${client.id}: ${(e as Error).message}`);
       client.disconnect();
     }
   }
 
-  private extractToken(client: Socket): string | undefined {
-    // Сначала ищем в auth (правильный способ для клиентов)
-    const fromAuth = client.handshake.auth?.token;
-    if (fromAuth) {
-      return fromAuth;
-    }
-
-    const fromHeaders = client.handshake.headers?.authorization;
-    if (fromHeaders && fromHeaders.startsWith('Bearer ')) {
-      return fromHeaders.split(' ')[1];
-    }
-    
-    return undefined;
-  }
-
   handleDisconnect(client: Socket) {
-    this.logger.log(`Client disconnected: ${client.id}`);
-    const userId = this.socketIdToUserId.get(client.id); 
+    const userId = this.socketIdToUserId.get(client.id);
     if (userId) {
       this.socketIdToUserId.delete(client.id);
       const userHasOtherConnections = Array.from(this.socketIdToUserId.values()).includes(userId);
       if (!userHasOtherConnections) {
         this.onlineUsers.delete(userId);
         this.server.emit('presenceUpdate', { userId, status: 'offline' });
+        this.logger.log(`[Presence] User ${userId} disconnected. Total online: ${this.onlineUsers.size}`);
       }
     }
+  }
+
+  @SubscribeMessage('leaveRoom')
+  handleLeaveRoom(@MessageBody('chatId') chatId: string, @ConnectedSocket() client: Socket) {
+    if (!chatId) return;
+    client.leave(chatId);
+    this.logger.log(`[Room] Client ${client.id} left room ${chatId}`);
   }
 
 
@@ -163,5 +150,12 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       content: aiResponse,
       createdAt: new Date(),
     });
+  }
+  private extractToken(client: Socket): string | undefined {
+    const fromAuth = client.handshake.auth?.token;
+    if (fromAuth) return fromAuth;
+    const fromHeaders = client.handshake.headers?.authorization;
+    if (fromHeaders && fromHeaders.startsWith('Bearer ')) return fromHeaders.split(' ')[1];
+    return undefined;
   }
 }
