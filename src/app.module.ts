@@ -11,9 +11,9 @@ import { AiCharacterModule } from './ai-character/ai-character.module';
 import { AiModule } from './ai/ai.module';
 import { StripeModule } from './stripe/stripe.module';
 import { FilesModule } from './files/files.module';
-
+ 
 @Module({
-  imports: [
+  imports: [  
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
     AuthModule,

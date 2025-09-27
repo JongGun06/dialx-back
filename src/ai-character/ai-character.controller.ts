@@ -12,7 +12,6 @@ import { UpdateAiCharacterDto } from './dto/update-ai-character.dto';
 export class AiCharacterController {
   constructor(private readonly aiCharacterService: AiCharacterService) {}
 
-  // --- НОВЫЙ ЭНДПОИНТ: Получение истории сообщений ---
   @Get(':id/messages')
   findMessages(
     @Param('id') characterId: string,
@@ -21,7 +20,6 @@ export class AiCharacterController {
     const userId = req.user!.sub;
     return this.aiCharacterService.findMessagesForCharacter(characterId, userId);
   }
-  // ---------------------------------------------
 
   @Post()
   create(@Body() dto: CreateAiCharacterDto, @Req() req: Request) {

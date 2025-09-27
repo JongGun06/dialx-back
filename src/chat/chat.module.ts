@@ -14,7 +14,7 @@ import { JwtModule } from '@nestjs/jwt'; // <-- ИМПОРТИРУЙ ЭТО
 @Module({
   imports: [
     PrismaModule,
-    ConfigModule,
+    ConfigModule, 
     AiModule,
     forwardRef(() => AuthModule),
     JwtModule.register({}),
