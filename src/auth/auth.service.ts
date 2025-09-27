@@ -34,10 +34,13 @@ export class AuthService {
         email: dto.email,
         password: hashedPassword,
         profile: { create: { username: dto.username } },
+        isEmailConfirmed: true,
       },
     });
-    await this.sendConfirmationEmail(user);
-    return { message: 'Регистрация успешна. Пожалуйста, подтвердите ваш email.' };
+    // await this.sendConfirmationEmail(user);
+    // return { message: 'Регистрация успешна. Пожалуйста, подтвердите ваш email.' };
+    return { message: 'Регистрация успешна' };
+
   }
 
   async login(dto: LoginUserDto) {
@@ -47,7 +50,7 @@ export class AuthService {
     const passwordMatches = await bcrypt.compare(dto.password, user.password);
     if (!passwordMatches) throw new ForbiddenException('Неверные учетные данные');
     
-    if (!user.isEmailConfirmed) throw new ForbiddenException('Пожалуйста, подтвердите ваш email перед входом.');
+    // if (!user.isEmailConfirmed) throw new ForbiddenException('Пожалуйста, подтвердите ваш email перед входом.');
 
     const tokens = await this.generateTokens(user.id, user.email);
     await this.updateRefreshTokenHash(user.id, tokens.refreshToken);
